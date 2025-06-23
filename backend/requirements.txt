@@ -5,4 +5,5 @@ yt-dlp
 openai
 whisper
 ffmpeg-python
-pydantic 
+pydantic
+python-dotenv 
