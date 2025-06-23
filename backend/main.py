@@ -173,42 +173,49 @@ def fetch_captions(video_id):
     return None
 
 def download_audio(url, output_path):
-    ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
-        'outtmpl': output_path + '.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'wav',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-        'no_warnings': True,
-        'extractaudio': True,
-        'audioformat': 'wav',
-        'prefer_ffmpeg': True,
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    try:
+        ydl_opts = {
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+            'outtmpl': output_path + '.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'extractaudio': True,
+            'audioformat': 'mp3',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'prefer_ffmpeg': True,
+        }
         
-    # Return the path to the extracted audio file
-    possible_extensions = ['.wav', '.m4a', '.mp3', '.webm']
-    for ext in possible_extensions:
-        audio_file = output_path + ext
-        if os.path.exists(audio_file):
-            return audio_file
-    
-    return None
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+            
+        # Return the path to the extracted audio file
+        possible_extensions = ['.mp3', '.wav', '.m4a', '.webm', '.ogg']
+        for ext in possible_extensions:
+            audio_file = output_path + ext
+            if os.path.exists(audio_file):
+                return audio_file
+        
+        return None
+    except Exception:
+        return None
 
 def transcribe_audio(audio_path):
-    model = whisper.load_model("base")
-    result = model.transcribe(
-        audio_path,
-        language='en',
-        task='transcribe',
-        fp16=False
-    )
-    return result['text'].strip() if result['text'] else None
+    try:
+        model = whisper.load_model("tiny")  # Use tiny model for faster processing
+        result = model.transcribe(
+            audio_path,
+            language='en',
+            task='transcribe',
+            fp16=False,
+            verbose=False
+        )
+        return result['text'].strip() if result['text'] else None
+    except Exception:
+        return None
 
 def summarize_text(text):
     if not text or not text.strip():
@@ -293,24 +300,27 @@ async def process_video_summary(video_id: str):
     captions = fetch_captions(video_id)
     
     if captions and len(captions.strip()) > 50:  # Ensure we have substantial caption content
-        summary = summarize_text(captions)
-        return {
-            "summary": summary,
-            "method": "captions",
-            "video_id": video_id,
-            "title": video_title
-        }
+        try:
+            summary = summarize_text(captions)
+            return {
+                "summary": summary,
+                "method": "captions",
+                "video_id": video_id,
+                "title": video_title
+            }
+        except Exception:
+            pass  # Continue to audio transcription if caption summarization fails
     
     # Fallback to audio transcription
-    with tempfile.TemporaryDirectory() as tmpdir:
-        audio_base_path = os.path.join(tmpdir, f"audio_{video_id}")
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        try:
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_base_path = os.path.join(tmpdir, f"audio_{video_id}")
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            
             audio_file = download_audio(video_url, audio_base_path)
             
             if not audio_file or not os.path.exists(audio_file):
-                raise HTTPException(status_code=500, detail="Failed to extract audio from video")
+                raise HTTPException(status_code=422, detail="Could not extract audio from video. Video may be restricted or unavailable.")
             
             transcript = transcribe_audio(audio_file)
             
@@ -325,8 +335,7 @@ async def process_video_summary(video_id: str):
                 "video_id": video_id,
                 "title": video_title
             }
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail="Failed to process video audio")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to process video. Please try again or check if the video is available.")
