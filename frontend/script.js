@@ -1,7 +1,7 @@
 // OAuth Configuration
 const CLIENT_ID = '1060175441605-3hudt7ldlotdouoau00jsbuhnamqvgeg.apps.googleusercontent.com';
 const REDIRECT_URI = 'https://www.vidsummarize.online';
-const API_ENDPOINT = '';
+const API_ENDPOINT = 'https://youtubevideosummarizer-7qhe.onrender.com';
 
 // Elements
 let loginBtn;
