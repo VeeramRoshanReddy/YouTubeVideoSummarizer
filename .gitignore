@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -67,4 +67,17 @@ Pipfile.lock
 .DS_Store
 
 # Windows
-Thumbs.db 
+Thumbs.db
+
+# Frontend static build (if any)
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+frontend/out/
+
+# Logs
+*.log
+
+# Render/Vercel/Deployment
+.vercel/
+.render/ 

@@ -1,41 +1,99 @@
-# YouTube Video Summarizer Backend
+# YouTube Video Summarizer
 
-This is a FastAPI backend for summarizing YouTube videos. It extracts captions using the YouTube Data API or transcribes audio using Whisper if captions are unavailable, then summarizes the content using an AI model (e.g., OpenAI GPT).
+A full-stack web application to generate concise AI-powered summaries of YouTube videos. Users authenticate with Google, submit a YouTube link, and receive a summary generated from captions or audio transcription using advanced AI models.
+
+---
 
 ## Features
-- Accepts YouTube video URLs and returns concise summaries
-- Uses YouTube Data API for captions
-- Falls back to audio transcription (yt-dlp, ffmpeg, Whisper) if captions are missing
-- Summarizes using OpenAI GPT
+- **Google OAuth** authentication (frontend)
+- **Paste any YouTube video URL** to get a summary
+- **Captions extraction** via YouTube Data API and YouTube Transcript API
+- **Fallback to audio transcription** using Whisper if captions are unavailable
+- **Summarization** using OpenAI GPT models
+- **No persistent storage**—stateless, privacy-friendly
+- **Modern UI** (HTML, CSS, JS)
 
-## Setup
+---
 
-1. **Clone the repository**
-2. **Install dependencies:**
-   ```
-   cd backend
-   pip install -r requirements.txt
-   ```
-3. **Set up environment variables:**
-   - Create a `.env` file in the root directory (see below)
-4. **Run the server:**
-   ```
-   uvicorn main:app --reload
-   ```
-
-## Environment Variables
-Create a `.env` file in the root directory with the following:
+## Project Structure
 
 ```
-YOUTUBE_API_KEY=your_youtube_api_key
+YouTube_Video_Summarizer/
+├── backend/
+│   ├── main.py              # FastAPI backend
+│   └── requirements.txt     # Backend dependencies
+├── frontend/
+│   ├── index.html           # Main HTML file
+│   ├── script.js            # Frontend logic
+│   └── styles.css           # Styling
+├── .gitignore
+└── README.md
+```
+
+---
+
+## Backend (FastAPI)
+- **Location:** `/backend`
+- **Deploy on:** Render (or any Python server)
+- **Main entry:** `main.py`
+- **Dependencies:** See `requirements.txt`
+- **Environment Variables:**
+  - `YOUTUBE_DATA_API_KEY` (YouTube Data API v3 key)
+  - `OPENAI_API_KEY` (OpenAI API key)
+  - `GOOGLE_CLIENT_ID` (Google OAuth client ID)
+  - `GOOGLE_CLIENT_SECRET` (Google OAuth client secret)
+
+### Setup & Run Locally
+```bash
+cd backend
+pip install -r requirements.txt
+# Create a .env file with the required keys
+uvicorn main:app --reload
+```
+
+### API Endpoints
+- `POST /summarize` — `{ "url": "YOUTUBE_VIDEO_URL" }` → `{ "summary": "..." }`
+- `POST /summary/{video_id}` — Summarize by YouTube video ID
+- `POST /auth` — Exchange Google OAuth code for access token
+- `GET /` — API status/info
+
+---
+
+## Frontend (Static HTML/JS/CSS)
+- **Location:** `/frontend`
+- **Deploy on:** Vercel (or any static host)
+- **Main entry:** `index.html`
+- `No build step required`
+- **Config:** Set `CLIENT_ID`, `REDIRECT_URI`, and `API_ENDPOINT` in `script.js`
+
+### Usage
+- User signs in with Google
+- Pastes a YouTube URL
+- Receives a summary in the UI
+
+---
+
+## Deployment
+- **Frontend:** Deploy `/frontend` to Vercel (drag-and-drop or via Git integration)
+- **Backend:** Deploy `/backend` to Render (Python web service)
+
+---
+
+## .env Example (Backend)
+```
+YOUTUBE_DATA_API_KEY=your_youtube_data_api_key
 OPENAI_API_KEY=your_openai_api_key
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
 ```
 
-## API Usage
-- **POST** `/summarize`
-  - Request body: `{ "url": "YOUTUBE_VIDEO_URL" }`
-  - Response: `{ "summary": "..." }`
+---
 
-## Notes
-- Requires `ffmpeg` installed on your system.
-- The frontend is deployed separately and communicates with this backend via HTTP. 
+## .gitignore
+- Ignores Python cache, virtual environments, .env, and editor files
+- Ignores frontend build artifacts (if any)
+
+---
+
+## License
+MIT (or specify your license) 

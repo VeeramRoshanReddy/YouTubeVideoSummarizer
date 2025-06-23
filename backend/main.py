@@ -12,7 +12,6 @@ from youtube_transcript_api.formatters import TextFormatter
 from typing import Optional, Dict, Any
 import google.generativeai as genai
 
-# Load environment variables from .env
 load_dotenv()
 
 app = FastAPI(
@@ -22,28 +21,22 @@ app = FastAPI(
 )
 
 # CORS settings for frontend
-origins = [
-    "*",  # Allow all origins for now - restrict this in production
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
 )
 
-# Set your API keys here
 YOUTUBE_DATA_API_KEY = os.getenv("YOUTUBE_DATA_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
-# Initialize Gemini AI with updated model name
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Updated to use current Gemini 2.5 Flash model
     gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 else:
     gemini_model = None
@@ -100,7 +93,7 @@ async def exchange_code_for_token(auth_request: AuthRequest):
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 def get_video_id(url):
-    """Extract video ID from various YouTube URL formats"""
+    """Extraction of video ID from various YouTube URL formats"""
     if not url:
         return None
     
@@ -151,7 +144,7 @@ def get_video_id(url):
     return None
 
 def get_video_info(video_id: str) -> Dict[str, Any]:
-    """Get video information from YouTube API"""
+    """Getting video information from YouTube API"""
     try:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
         
@@ -184,19 +177,19 @@ def extract_captions(video_id: str) -> Optional[str]:
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         transcript_data = None
         
-        # Try manual transcripts first (higher quality)
+        # Trying manual transcripts first (higher quality)
         try:
             transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
             transcript_data = transcript.fetch()
             print(f"Found manual transcript for video {video_id}")
         except:
-            # Try auto-generated transcripts
+            # Trying auto-generated transcripts
             try:
                 transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
                 transcript_data = transcript.fetch()
                 print(f"Found auto-generated transcript for video {video_id}")
             except:
-                # Try any available transcript
+                # Trying any available transcript
                 try:
                     available_transcripts = list(transcript_list)
                     if available_transcripts:
@@ -211,7 +204,7 @@ def extract_captions(video_id: str) -> Optional[str]:
         
         if transcript_data:
             try:
-                # Try using TextFormatter first
+                # Trying using TextFormatter first
                 formatter = TextFormatter()
                 caption_text = formatter.format_transcript(transcript_data)
                 
@@ -239,8 +232,7 @@ def summarize_text(text: str, content_type: str) -> str:
         raise HTTPException(status_code=500, detail="Gemini API not configured")
     
     # Limit text length to prevent token overflow
-    # Gemini 2.5 Flash can handle larger context windows
-    max_chars = 100000  # Increased limit for Gemini 2.5 Flash
+    max_chars = 100000
     if len(text) > max_chars:
         text = text[:max_chars] + "..."
     
@@ -281,7 +273,7 @@ Please provide a detailed, structured summary:"""
             prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
-                max_output_tokens=1000,  # Slightly increased for better summaries
+                max_output_tokens=1000,
                 top_p=0.8,
                 top_k=40
             )
@@ -296,13 +288,10 @@ Please provide a detailed, structured summary:"""
         print(f"Gemini API error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Gemini API error: {str(e)}")
 
-async def process_video_summary(video_id: str) -> Dict[str, Any]:
-    """Process video summary with priority: captions -> description"""
-    
+async def process_video_summary(video_id: str) -> Dict[str, Any]:    
     if not video_id or len(video_id) != 11:
         raise HTTPException(status_code=400, detail="Invalid YouTube video ID format")
     
-    # Get video info first
     video_info = get_video_info(video_id)
     if not video_info:
         raise HTTPException(status_code=404, detail="Video not found or unavailable")
@@ -361,12 +350,11 @@ async def process_video_summary(video_id: str) -> Dict[str, Any]:
             print(f"Summarization failed for video {video_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to generate summary: {str(e)}")
     
-    # This should not be reached due to the check above, but kept as safety net
     raise HTTPException(status_code=500, detail="Unexpected error in content processing")
 
 @app.post("/summarize")
 async def summarize_video(request: VideoRequest):
-    """Summarize video from URL"""
+
     if not YOUTUBE_DATA_API_KEY:
         raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
     if not GEMINI_API_KEY:
