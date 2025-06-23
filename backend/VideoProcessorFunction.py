@@ -36,7 +36,7 @@ def get_cors_headers():
         "Access-Control-Allow-Methods": "OPTIONS,GET,POST",
         "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Requested-With",
         "Access-Control-Max-Age": "3600",
-        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Credentials": "false",
         "Content-Type": "application/json"
     }
 
