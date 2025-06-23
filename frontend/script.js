@@ -483,7 +483,7 @@ function callSummarizeAPI(videoId) {
         },
         //body: JSON.stringify({ videoId }),
         mode: 'cors',
-        credentials: 'include'
+        credentials: 'omit'
     })
     .then(response => {
         console.log("Video processing API response status:", response.status);
