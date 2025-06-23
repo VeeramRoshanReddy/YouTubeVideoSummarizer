@@ -1,11 +1,8 @@
 fastapi
-uvicorn
-google-api-python-client
-yt-dlp
-openai
-whisper
-ffmpeg-python
 pydantic
+openai
+google-api-python-client
 python-dotenv
+youtube-transcript-api
 requests
-youtube-transcript-api 
+uvicorn
