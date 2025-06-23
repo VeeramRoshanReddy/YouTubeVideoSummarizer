@@ -64,7 +64,6 @@ class AuthRequest(BaseModel):
     code: str
     redirect_uri: str
 
-# ROOT PATH FIX - Add this endpoint
 @app.get("/")
 async def root():
     return {
@@ -114,22 +113,13 @@ def get_video_id(url):
     if not url:
         return None
     
-    # Clean the URL
     url = url.strip()
     
-    # Parse the URL
     try:
         parsed = urlparse(url)
     except Exception:
         return None
     
-    # Handle different YouTube URL patterns
-    
-    # 1. Standard watch URL: https://www.youtube.com/watch?v=VIDEO_ID
-    # 4. Watch URL with additional parameters: https://www.youtube.com/watch?v=VIDEO_ID&t=120s
-    # 5. Watch URL with playlist: https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID
-    # 8. Mobile watch link: https://m.youtube.com/watch?v=VIDEO_ID
-    # 9. Music or domain variants: https://music.youtube.com/watch?v=VIDEO_ID
     if parsed.path == '/watch' and parsed.query:
         query_params = parse_qs(parsed.query)
         if 'v' in query_params:
@@ -137,35 +127,25 @@ def get_video_id(url):
             if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
                 return video_id
     
-    # 2. Shortened URL: https://youtu.be/VIDEO_ID
     elif parsed.netloc == 'youtu.be' and parsed.path:
         video_id = parsed.path.lstrip('/')
         if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
             return video_id
     
-    # 3. Embed URL: https://www.youtube.com/embed/VIDEO_ID
     elif parsed.path.startswith('/embed/'):
         video_id = parsed.path.split('/embed/')[1].split('?')[0]
         if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
             return video_id
     
-    # 7. Shorts URL: https://www.youtube.com/shorts/VIDEO_ID
     elif parsed.path.startswith('/shorts/'):
         video_id = parsed.path.split('/shorts/')[1].split('?')[0]
         if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
             return video_id
     
-    # 6. Playlist URL (extract first video if available)
-    elif parsed.path == '/playlist' and parsed.query:
-        # For playlist URLs without a specific video, we can't extract a video ID
-        # This would require additional API calls to get the first video from the playlist
-        return None
-    
-    # Fallback: Try regex patterns for edge cases
     patterns = [
         r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/|youtube\.com/shorts/)([A-Za-z0-9_-]{11})',
         r'(?:youtube\.com/.*[?&]v=)([A-Za-z0-9_-]{11})',
-        r'^([A-Za-z0-9_-]{11})$'  # Direct video ID
+        r'^([A-Za-z0-9_-]{11})$'
     ]
     
     for pattern in patterns:
@@ -177,68 +157,102 @@ def get_video_id(url):
     
     return None
 
-async def fetch_captions_with_retry(video_id: str, max_retries: int = 3) -> Optional[str]:
-    """Fetch captions/transcripts from YouTube video with retry mechanism"""
-    
-    for attempt in range(max_retries):
+def get_video_info(video_id: str) -> Dict[str, Any]:
+    """Get video information from YouTube API"""
+    try:
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
+        
+        video_response = youtube.videos().list(
+            part='snippet,status',
+            id=video_id
+        ).execute()
+        
+        if not video_response.get('items'):
+            return None
+        
+        video_info = video_response['items'][0]
+        snippet = video_info.get('snippet', {})
+        
+        return {
+            'title': snippet.get('title', 'Unknown Title'),
+            'description': snippet.get('description', ''),
+            'channel': snippet.get('channelTitle', 'Unknown Channel'),
+            'published_at': snippet.get('publishedAt', ''),
+        }
+        
+    except Exception:
+        return None
+
+def extract_captions(video_id: str) -> Optional[str]:
+    """Extract captions/transcripts from YouTube video"""
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Try manual transcripts first
         try:
-            # Add random delay to avoid rate limiting
-            if attempt > 0:
-                delay = random.uniform(1, 3)
-                await asyncio.sleep(delay)
-            
-            # Try to get available transcript languages first
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            
-            # Try English transcripts first
+            transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+            transcript_data = transcript.fetch()
+        except:
+            # Try auto-generated transcripts
             try:
-                transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+                transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
                 transcript_data = transcript.fetch()
             except:
-                # If English not available, try any available transcript
+                # Try any available transcript
                 try:
-                    transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
-                    transcript_data = transcript.fetch()
-                except:
-                    # Get any available transcript
                     available_transcripts = list(transcript_list)
                     if available_transcripts:
                         transcript_data = available_transcripts[0].fetch()
                     else:
-                        continue
-            
-            # Combine all transcript entries
-            if transcript_data:
-                # Use TextFormatter for better formatting
+                        return None
+                except:
+                    return None
+        
+        if transcript_data:
+            try:
                 formatter = TextFormatter()
                 caption_text = formatter.format_transcript(transcript_data)
                 
                 if caption_text and len(caption_text.strip()) > 50:
                     return caption_text.strip()
-            
-        except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {str(e)}")
-            
-            # Try fallback method on last attempt
-            if attempt == max_retries - 1:
-                try:
-                    transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-                    caption_text = ' '.join([entry['text'] for entry in transcript_list])
-                    
-                    if caption_text and len(caption_text.strip()) > 50:
-                        return caption_text.strip()
-                        
-                except Exception as e2:
-                    print(f"Fallback method also failed: {str(e2)}")
+            except:
+                # Fallback: manually join transcript entries
+                caption_text = ' '.join([entry.get('text', '') for entry in transcript_data if entry.get('text')])
+                if caption_text and len(caption_text.strip()) > 50:
+                    return caption_text.strip()
+        
+    except Exception:
+        pass
     
     return None
 
-def download_audio_improved(url: str, output_path: str) -> Optional[str]:
-    """Download audio from YouTube video with improved options"""
+def extract_audio_and_transcribe(video_id: str) -> Optional[str]:
+    """Download audio using yt-dlp and transcribe using Whisper"""
+    try:
+        with tempfile.TemporaryDirectory(prefix="youtube_audio_") as tmpdir:
+            audio_base_path = os.path.join(tmpdir, f"audio_{video_id}")
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            # Download audio
+            audio_file = download_audio(video_url, audio_base_path)
+            
+            if not audio_file or not os.path.exists(audio_file):
+                return None
+            
+            # Transcribe audio
+            transcript = transcribe_audio(audio_file)
+            
+            if transcript and len(transcript.strip()) > 50:
+                return transcript.strip()
+                
+    except Exception:
+        pass
     
-    # Updated strategies with better format selection
+    return None
+
+def download_audio(url: str, output_path: str) -> Optional[str]:
+    """Download audio from YouTube video using yt-dlp"""
     strategies = [
-        # Strategy 1: High quality audio extraction
         {
             'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best[height<=480]',
             'outtmpl': output_path + '.%(ext)s',
@@ -252,82 +266,62 @@ def download_audio_improved(url: str, output_path: str) -> Optional[str]:
                 'preferredquality': '128',
             }],
             'prefer_ffmpeg': True,
-            'writesubtitles': False,
-            'writeautomaticsub': False,
         },
-        # Strategy 2: Simple format without post-processing
         {
             'format': 'bestaudio[filesize<50M]/best[height<=360][filesize<50M]',
             'outtmpl': output_path + '.%(ext)s',
             'quiet': True,
             'no_warnings': True,
-            'writesubtitles': False,
-            'writeautomaticsub': False,
         },
-        # Strategy 3: Lowest quality for restricted videos
         {
             'format': 'worst[ext=mp4]/worst',
-            'outtmpl': output_path + '.%(ext)s',
-            'quiet': True,
-            'no_warnings': True,
-            'writesubtitles': False,
-            'writeautomaticsub': False,
-        },
-        # Strategy 4: Audio-only with size limit
-        {
-            'format': 'bestaudio[filesize<30M]',
             'outtmpl': output_path + '.%(ext)s',
             'quiet': True,
             'no_warnings': True,
         }
     ]
     
-    for i, strategy in enumerate(strategies):
+    for strategy in strategies:
         try:
-            print(f"Trying download strategy {i + 1}")
-            
-            # Add additional options for server environments
             strategy.update({
                 'socket_timeout': 30,
-                'retries': 3,
-                'fragment_retries': 3,
-                'http_chunk_size': 10485760,  # 10MB chunks
+                'retries': 2,
+                'fragment_retries': 2,
             })
             
             with yt_dlp.YoutubeDL(strategy) as ydl:
                 ydl.download([url])
                 
-            # Return the path to the extracted audio file
             possible_extensions = ['.mp3', '.wav', '.m4a', '.webm', '.ogg', '.mp4', '.opus']
             for ext in possible_extensions:
                 audio_file = output_path + ext
                 if os.path.exists(audio_file):
-                    file_size = os.path.getsize(audio_file)
-                    print(f"Downloaded audio file: {audio_file} ({file_size} bytes)")
                     return audio_file
                     
-        except Exception as e:
-            print(f"Strategy {i + 1} failed: {str(e)}")
+        except Exception:
             continue
     
     return None
 
-def transcribe_audio_improved(audio_path: str) -> Optional[str]:
-    """Transcribe audio using Whisper with improved settings"""
+def transcribe_audio(audio_path: str) -> Optional[str]:
+    """Transcribe audio using Whisper"""
     try:
-        # Check file size
+        if not os.path.exists(audio_path):
+            return None
+            
         file_size = os.path.getsize(audio_path)
-        print(f"Transcribing audio file: {audio_path} ({file_size} bytes)")
         
-        # Use different models based on file size
-        if file_size > 50 * 1024 * 1024:  # 50MB
+        # Skip if file is too small (likely corrupted)
+        if file_size < 1024:  # 1KB minimum
+            return None
+        
+        if file_size > 50 * 1024 * 1024:
             model_name = "tiny"
-        elif file_size > 25 * 1024 * 1024:  # 25MB
+        elif file_size > 25 * 1024 * 1024:
             model_name = "base"
         else:
             model_name = "small"
             
-        print(f"Using Whisper model: {model_name}")
         model = whisper.load_model(model_name)
         result = model.transcribe(
             audio_path,
@@ -335,32 +329,36 @@ def transcribe_audio_improved(audio_path: str) -> Optional[str]:
             task='transcribe',
             fp16=False,
             verbose=False,
-            word_timestamps=False,
             temperature=0.0,
-            best_of=1,
-            beam_size=1,
+            no_speech_threshold=0.6,
         )
         
-        transcript = result['text'].strip() if result and result.get('text') else None
-        print(f"Transcription completed. Length: {len(transcript) if transcript else 0} characters")
+        transcript_text = result['text'].strip() if result and result.get('text') else None
+        return transcript_text if transcript_text and len(transcript_text) > 20 else None
         
-        return transcript
-        
-    except Exception as e:
-        print(f"Transcription failed: {str(e)}")
+    except Exception:
         return None
 
-def summarize_text_improved(text: str) -> str:
-    """Summarize text using OpenAI with improved prompts and error handling"""
+def summarize_text(text: str, content_type: str) -> str:
+    """Summarize text using OpenAI"""
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="No text content to summarize")
     
-    # Truncate text if too long to avoid token limits
-    max_chars = 12000  # Approximately 3000 tokens
+    max_chars = 12000
     if len(text) > max_chars:
         text = text[:max_chars] + "..."
     
-    system_prompt = """You are an expert content summarizer specializing in YouTube videos. Create a comprehensive, well-structured summary that captures the key information, main arguments, and important details from the video transcript.
+    if content_type == "description":
+        system_prompt = """You are an expert content summarizer. Create a comprehensive summary based on the YouTube video description provided. Extract key information, main topics, and important details mentioned in the description.
+
+Your summary should:
+- Identify the main topic and purpose of the video
+- Extract key points and important information
+- Organize content clearly with headers if needed
+- Include any specific details, links, or resources mentioned
+- Maintain context and meaning from the description"""
+    else:
+        system_prompt = """You are an expert content summarizer specializing in YouTube videos. Create a comprehensive, well-structured summary that captures the key information, main arguments, and important details from the video content.
 
 Your summary should:
 - Begin with a brief overview of the video's main topic
@@ -370,10 +368,9 @@ Your summary should:
 - Maintain the original context and meaning
 - Be detailed enough to be valuable while remaining concise"""
 
-    user_prompt = f"Please create a detailed, structured summary of this YouTube video transcript:\n\n{text}"
+    user_prompt = f"Please create a detailed, structured summary of this YouTube video {content_type}:\n\n{text}"
     
     try:
-        # Try newer OpenAI client first
         if openai_client:
             response = openai_client.chat.completions.create(
                 model="gpt-3.5-turbo-16k",
@@ -383,14 +380,9 @@ Your summary should:
                 ],
                 max_tokens=800,
                 temperature=0.2,
-                top_p=1.0,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
             )
-            summary = response.choices[0].message.content
-            return summary
+            return response.choices[0].message.content
         else:
-            # Fallback to older OpenAI API format
             response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo-16k",
                 messages=[
@@ -400,24 +392,21 @@ Your summary should:
                 max_tokens=800,
                 temperature=0.2,
             )
-            summary = response['choices'][0]['message']['content']
-            return summary
+            return response['choices'][0]['message']['content']
             
-    except Exception as e1:
-        # Try with standard model as fallback
+    except Exception:
         try:
             if openai_client:
                 response = openai_client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt[:8000]}  # Further truncate for standard model
+                        {"role": "user", "content": user_prompt[:8000]}
                     ],
                     max_tokens=600,
                     temperature=0.3,
                 )
-                summary = response.choices[0].message.content
-                return summary
+                return response.choices[0].message.content
             else:
                 response = openai.ChatCompletion.create(
                     model="gpt-3.5-turbo",
@@ -428,123 +417,79 @@ Your summary should:
                     max_tokens=600,
                     temperature=0.3,
                 )
-                summary = response['choices'][0]['message']['content']
-                return summary
-        except Exception as e2:
-            raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e2)}")
-
-async def get_video_info_safe(video_id: str) -> Dict[str, Any]:
-    """Safely get video information from YouTube API"""
-    try:
-        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
-        
-        video_response = youtube.videos().list(
-            part='snippet,status',
-            id=video_id
-        ).execute()
-        
-        if not video_response.get('items'):
-            raise HTTPException(status_code=404, detail="Video not found, is private, or has been removed")
-        
-        video_info = video_response['items'][0]
-        snippet = video_info.get('snippet', {})
-        status = video_info.get('status', {})
-        
-        # Check if video is available
-        if not status.get('uploadStatus') == 'processed':
-            raise HTTPException(status_code=422, detail="Video is not fully processed or available")
-        
-        if status.get('privacyStatus') == 'private':
-            raise HTTPException(status_code=403, detail="Video is private and cannot be accessed")
-        
-        title = snippet.get('title', 'Unknown Title')
-        description = snippet.get('description', '')
-        duration = video_info.get('contentDetails', {}).get('duration', '')
-        
-        return {
-            'title': title,
-            'description': description,
-            'duration': duration,
-            'channel': snippet.get('channelTitle', 'Unknown Channel'),
-            'published_at': snippet.get('publishedAt', ''),
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to fetch video information from YouTube API")
+                return response['choices'][0]['message']['content']
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
 async def process_video_summary(video_id: str) -> Dict[str, Any]:
-    """Process video summary - main logic with improved error handling"""
+    """Process video summary with priority: captions -> audio -> description"""
     
-    # Validate video ID format
-    if not video_id or len(video_id) != 11 or not video_id.replace('-', '').replace('_', '').isalnum():
+    if not video_id or len(video_id) != 11:
         raise HTTPException(status_code=400, detail="Invalid YouTube video ID format")
     
-    # Get video info
-    video_info = await get_video_info_safe(video_id)
-    title = video_info['title']
-
-    # Try captions first (most reliable and preferred method)
-    captions = await fetch_captions_with_retry(video_id, max_retries=3)
+    # Get video info first
+    video_info = get_video_info(video_id)
+    if not video_info:
+        raise HTTPException(status_code=404, detail="Video not found or unavailable")
     
-    if captions and len(captions.strip()) > 100:
+    title = video_info['title']
+    content_found = None
+    method_used = None
+    
+    # Priority 1: Try captions
+    try:
+        captions = extract_captions(video_id)
+        if captions and len(captions.strip()) > 100:
+            content_found = captions
+            method_used = "captions"
+    except Exception:
+        pass
+    
+    # Priority 2: Try audio transcription (only if captions failed)
+    if not content_found:
         try:
-            summary = summarize_text_improved(captions)
-            return {
+            transcript = extract_audio_and_transcribe(video_id)
+            if transcript and len(transcript.strip()) > 100:
+                content_found = transcript
+                method_used = "audio_transcription"
+        except Exception:
+            pass
+    
+    # Priority 3: Use description as fallback (only if both above failed)
+    if not content_found:
+        description = video_info.get('description', '')
+        if description and len(description.strip()) > 50:
+            content_found = description
+            method_used = "description"
+    
+    # If we have content, summarize it
+    if content_found and method_used:
+        try:
+            content_type = "description" if method_used == "description" else "transcript"
+            summary = summarize_text(content_found, content_type)
+            
+            result = {
                 "success": True,
                 "summary": summary,
-                "method": "captions",
+                "method": method_used,
                 "video_id": video_id,
                 "title": title,
                 "video_info": video_info
             }
+            
+            if method_used == "description":
+                result["note"] = "Summary generated from video description as captions and audio were not accessible"
+            elif method_used == "audio_transcription":
+                result["note"] = "Summary generated from audio transcription as captions were not available"
+                
+            return result
+            
         except Exception as e:
-            # Continue to audio transcription
-            print(f"Caption summarization failed: {str(e)}")
-    else:
-        print("No captions available, trying audio transcription")
+            # If summarization fails, still try to return something useful
+            raise HTTPException(status_code=500, detail="Failed to generate summary from available content")
     
-    # Fallback to audio transcription if captions not available
-    try:
-        with tempfile.TemporaryDirectory(prefix="youtube_audio_") as tmpdir:
-            audio_base_path = os.path.join(tmpdir, f"audio_{video_id}")
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            audio_file = download_audio_improved(video_url, audio_base_path)
-            
-            if not audio_file or not os.path.exists(audio_file):
-                raise HTTPException(
-                    status_code=422, 
-                    detail="Unable to access video content. This video may have copyright restrictions, be region-blocked, have no available captions, or be a music video without spoken content."
-                )
-            
-            transcript = transcribe_audio_improved(audio_file)
-            
-            if not transcript or len(transcript.strip()) < 50:
-                raise HTTPException(
-                    status_code=422, 
-                    detail="Could not extract meaningful spoken content from video. The video may contain mostly music, have poor audio quality, or be too short."
-                )
-            
-            summary = summarize_text_improved(transcript)
-            
-            return {
-                "success": True,
-                "summary": summary,
-                "method": "audio_transcription",
-                "video_id": video_id,
-                "title": title,
-                "video_info": video_info,
-                "note": "Summary generated from audio transcription as captions were not available"
-            }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail="Unable to process video content. The video may have restricted access, contain no spoken content, or the audio could not be processed."
-        )
+    # If all methods fail
+    raise HTTPException(status_code=500, detail="No accessible content found for summarization")
 
 @app.post("/summarize")
 async def summarize_video(request: VideoRequest):
@@ -568,7 +513,4 @@ async def summarize_video_by_id(video_id: str):
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
     
-    if not video_id or len(video_id) != 11:
-        raise HTTPException(status_code=400, detail="Invalid YouTube video ID format")
-
     return await process_video_summary(video_id)
