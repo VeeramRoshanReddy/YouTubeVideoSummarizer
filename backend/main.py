@@ -58,6 +58,7 @@ async def root():
         "message": "YouTube Video Summarizer API is running!",
         "endpoints": {
             "summarize": "/summarize (POST)",
+            "summary_by_id": "/summary/{video_id} (POST)",
             "auth": "/auth (POST)",
             "docs": "/docs (GET)"
         }
@@ -176,6 +177,22 @@ async def summarize_video(request: VideoRequest):
     if not video_id:
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
 
+    return await process_video_summary(video_id)
+
+@app.post("/summary/{video_id}")
+async def summarize_video_by_id(video_id: str):
+    # Validate API keys
+    if not YOUTUBE_DATA_API_KEY:
+        raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    
+    if not video_id or len(video_id) != 11:
+        raise HTTPException(status_code=400, detail="Invalid YouTube video ID")
+
+    return await process_video_summary(video_id)
+
+async def process_video_summary(video_id: str):
     # Try to fetch captions first
     try:
         captions = fetch_captions(video_id)
@@ -198,7 +215,8 @@ async def summarize_video(request: VideoRequest):
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_path = os.path.join(tmpdir, f"audio_{video_id}")
             try:
-                download_audio(request.url, audio_path)
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                download_audio(video_url, audio_path)
                 # The actual file will have .mp3 extension after processing
                 mp3_path = f"{audio_path}.mp3"
                 if os.path.exists(mp3_path):
