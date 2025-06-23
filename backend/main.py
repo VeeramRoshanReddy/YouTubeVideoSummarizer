@@ -217,6 +217,7 @@ async def fetch_captions_with_retry(video_id: str, max_retries: int = 3) -> Opti
                     return caption_text.strip()
             
         except Exception as e:
+            print(f"Attempt {attempt + 1} failed: {str(e)}")
             
             # Try fallback method on last attempt
             if attempt == max_retries - 1:
@@ -228,7 +229,7 @@ async def fetch_captions_with_retry(video_id: str, max_retries: int = 3) -> Opti
                         return caption_text.strip()
                         
                 except Exception as e2:
-                    pass
+                    print(f"Fallback method also failed: {str(e2)}")
     
     return None
 
@@ -283,6 +284,7 @@ def download_audio_improved(url: str, output_path: str) -> Optional[str]:
     
     for i, strategy in enumerate(strategies):
         try:
+            print(f"Trying download strategy {i + 1}")
             
             # Add additional options for server environments
             strategy.update({
@@ -301,9 +303,11 @@ def download_audio_improved(url: str, output_path: str) -> Optional[str]:
                 audio_file = output_path + ext
                 if os.path.exists(audio_file):
                     file_size = os.path.getsize(audio_file)
+                    print(f"Downloaded audio file: {audio_file} ({file_size} bytes)")
                     return audio_file
                     
         except Exception as e:
+            print(f"Strategy {i + 1} failed: {str(e)}")
             continue
     
     return None
@@ -313,6 +317,7 @@ def transcribe_audio_improved(audio_path: str) -> Optional[str]:
     try:
         # Check file size
         file_size = os.path.getsize(audio_path)
+        print(f"Transcribing audio file: {audio_path} ({file_size} bytes)")
         
         # Use different models based on file size
         if file_size > 50 * 1024 * 1024:  # 50MB
@@ -322,6 +327,7 @@ def transcribe_audio_improved(audio_path: str) -> Optional[str]:
         else:
             model_name = "small"
             
+        print(f"Using Whisper model: {model_name}")
         model = whisper.load_model(model_name)
         result = model.transcribe(
             audio_path,
@@ -336,10 +342,12 @@ def transcribe_audio_improved(audio_path: str) -> Optional[str]:
         )
         
         transcript = result['text'].strip() if result and result.get('text') else None
+        print(f"Transcription completed. Length: {len(transcript) if transcript else 0} characters")
         
         return transcript
         
     except Exception as e:
+        print(f"Transcription failed: {str(e)}")
         return None
 
 def summarize_text_improved(text: str) -> str:
@@ -493,8 +501,9 @@ async def process_video_summary(video_id: str) -> Dict[str, Any]:
             }
         except Exception as e:
             # Continue to audio transcription
+            print(f"Caption summarization failed: {str(e)}")
     else:
-        pass
+        print("No captions available, trying audio transcription")
     
     # Fallback to audio transcription if captions not available
     try:
