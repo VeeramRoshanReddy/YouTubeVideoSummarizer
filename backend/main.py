@@ -331,11 +331,31 @@ async def summarize_video_by_id(video_id: str):
     return await process_video_summary(video_id)
 
 async def process_video_summary(video_id: str):
-    # Get video info and metadata
+    # Get video info
     try:
-        title, description, has_desc = get_video_metadata(video_id)
-        if not title:
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
+        video_response = youtube.videos().list(
+            part='snippet',
+            id=video_id
+        ).execute()
+        
+        if not video_response.get('items'):
             raise HTTPException(status_code=404, detail="Video not found")
+        
+        video_info = video_response['items'][0]['snippet']
+        title = video_info.get('title', 'Unknown')
+        description = video_info.get('description', '')
+        
+        # Clean description for potential use
+        clean_desc = None
+        if description and len(description.strip()) > 100:
+            clean_desc = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', description)
+            clean_desc = re.sub(r'@\w+', '', clean_desc)
+            clean_desc = re.sub(r'#\w+', '', clean_desc)
+            clean_desc = re.sub(r'\n\s*\n', '\n', clean_desc)
+            clean_desc = clean_desc.strip()
+            if len(clean_desc) < 200:
+                clean_desc = None
         
     except HTTPException:
         raise
@@ -358,9 +378,9 @@ async def process_video_summary(video_id: str):
             pass  # Continue to next method
     
     # Try description as fallback if substantial content available
-    if has_desc and description:
+    if clean_desc:
         try:
-            summary = summarize_text(description)
+            summary = summarize_text(clean_desc)
             return {
                 "summary": summary,
                 "method": "description",
