@@ -496,13 +496,17 @@ function callSummarizeAPI(videoId) {
     })
     .then(data => {
         console.log("Video processing API response:", data);
+        
         // Check if we got a direct result or need to poll
         if (data.status === 'completed' && data.summary) {
-            // Show result immediately
+            // Show result immediately (old format)
             showResult(data.videoTitle, data.summary, videoId);
         } else if (data.jobId) {
-            // Start polling for result
+            // Start polling for result (old format)
             pollJobStatus(data.jobId);
+        } else if (data.summary && data.video_id && data.title) {
+            // Handle new direct response format from backend
+            showResult(data.title, data.summary, data.video_id);
         } else {
             throw new Error('Invalid response from server');
         }

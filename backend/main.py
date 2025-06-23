@@ -168,21 +168,37 @@ def get_video_id(url):
 
 def fetch_captions(video_id):
     try:
-        # Try English transcript first
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'en-US', 'en-GB'])
+        # Try to get available transcript languages first
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Try English transcripts first
+        try:
+            transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+            transcript_data = transcript.fetch()
+        except:
+            # If English not available, try any available transcript
+            try:
+                transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
+                transcript_data = transcript.fetch()
+            except:
+                # Get any available transcript
+                available_transcripts = list(transcript_list)
+                if available_transcripts:
+                    transcript_data = available_transcripts[0].fetch()
+                else:
+                    return None
         
         # Combine all transcript entries
-        caption_text = ' '.join([entry['text'] for entry in transcript_list])
-        
-        if caption_text and len(caption_text.strip()) > 50:
-            return caption_text.strip()
+        if transcript_data:
+            caption_text = ' '.join([entry['text'] for entry in transcript_data])
             
-    except Exception:
+            if caption_text and len(caption_text.strip()) > 50:
+                return caption_text.strip()
+                
+    except Exception as e:
+        # Fallback to simple method
         try:
-            # Try any available transcript if English not available
             transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            
-            # Combine all transcript entries
             caption_text = ' '.join([entry['text'] for entry in transcript_list])
             
             if caption_text and len(caption_text.strip()) > 50:
