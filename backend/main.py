@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 import json
 import re
+from urllib.parse import urlparse, parse_qs
 
 # Load environment variables from .env
 load_dotenv()
@@ -97,39 +98,60 @@ async def exchange_code_for_token(auth_request: AuthRequest):
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 def get_video_id(url):
-    """Get video metadata including description which can be used as fallback content"""
+    """Extract video ID from various YouTube URL formats"""
+    if not url:
+        return None
+    
+    # Clean the URL
+    url = url.strip()
+    
+    # Parse the URL
     try:
-        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
-        video_response = youtube.videos().list(
-            part='snippet',
-            id=video_id
-        ).execute()
-        
-        if not video_response.get('items'):
-            return None, None, None
-        
-        video_info = video_response['items'][0]['snippet']
-        title = video_info.get('title', 'Unknown')
-        description = video_info.get('description', '')
-        
-        # Clean and extract meaningful content from description
-        if description and len(description.strip()) > 100:
-            # Remove URLs and social media handles
-            clean_desc = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', description)
-            clean_desc = re.sub(r'@\w+', '', clean_desc)
-            clean_desc = re.sub(r'#\w+', '', clean_desc)
-            clean_desc = re.sub(r'\n\s*\n', '\n', clean_desc)
-            clean_desc = clean_desc.strip()
-            
-            if len(clean_desc) > 200:  # Only use if substantial content
-                return title, clean_desc, True
-        
-        return title, None, False
-        
+        parsed = urlparse(url)
     except Exception:
-        return None, None, False
+        return None
+    
+    # Handle different YouTube URL patterns
+    
+    # 1. Standard watch URL: https://www.youtube.com/watch?v=VIDEO_ID
+    # 4. Watch URL with additional parameters: https://www.youtube.com/watch?v=VIDEO_ID&t=120s
+    # 5. Watch URL with playlist: https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID
+    # 8. Mobile watch link: https://m.youtube.com/watch?v=VIDEO_ID
+    # 9. Music or domain variants: https://music.youtube.com/watch?v=VIDEO_ID
+    if parsed.path == '/watch' and parsed.query:
+        query_params = parse_qs(parsed.query)
+        if 'v' in query_params:
+            video_id = query_params['v'][0]
+            if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
+                return video_id
+    
+    # 2. Shortened URL: https://youtu.be/VIDEO_ID
+    elif parsed.netloc == 'youtu.be' and parsed.path:
+        video_id = parsed.path.lstrip('/')
+        if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
+            return video_id
+    
+    # 3. Embed URL: https://www.youtube.com/embed/VIDEO_ID
+    elif parsed.path.startswith('/embed/'):
+        video_id = parsed.path.split('/embed/')[1].split('?')[0]
+        if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
+            return video_id
+    
+    # 7. Shorts URL: https://www.youtube.com/shorts/VIDEO_ID
+    elif parsed.path.startswith('/shorts/'):
+        video_id = parsed.path.split('/shorts/')[1].split('?')[0]
+        if len(video_id) == 11 and video_id.replace('-', '').replace('_', '').isalnum():
+            return video_id
+    
+    # 6. Playlist URL (extract first video if available)
+    elif parsed.path == '/playlist' and parsed.query:
+        # For playlist URLs without a specific video, we can't extract a video ID
+        # This would require additional API calls to get the first video from the playlist
+        return None
+    
+    # Fallback: Try regex patterns for edge cases
     patterns = [
-        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([A-Za-z0-9_-]{11})',
+        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/|youtube\.com/shorts/)([A-Za-z0-9_-]{11})',
         r'(?:youtube\.com/.*[?&]v=)([A-Za-z0-9_-]{11})',
         r'^([A-Za-z0-9_-]{11})$'  # Direct video ID
     ]
@@ -137,7 +159,10 @@ def get_video_id(url):
     for pattern in patterns:
         match = re.search(pattern, url)
         if match:
-            return match.group(1)
+            video_id = match.group(1)
+            if len(video_id) == 11:
+                return video_id
+    
     return None
 
 def fetch_captions(video_id):
