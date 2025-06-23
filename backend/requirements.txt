@@ -1,6 +1,6 @@
 fastapi
 pydantic
-openai
+google-generativeai
 google-api-python-client
 python-dotenv
 youtube-transcript-api

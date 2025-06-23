@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import openai
 import os
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
@@ -11,6 +10,7 @@ from urllib.parse import urlparse, parse_qs
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
 from typing import Optional, Dict, Any
+import google.generativeai as genai
 
 # Load environment variables from .env
 load_dotenv()
@@ -36,19 +36,16 @@ app.add_middleware(
 
 # Set your API keys here
 YOUTUBE_DATA_API_KEY = os.getenv("YOUTUBE_DATA_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
-# Initialize OpenAI client
-if OPENAI_API_KEY:
-    try:
-        from openai import OpenAI
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    except ImportError:
-        # Fallback for older OpenAI versions
-        openai.api_key = OPENAI_API_KEY
-        openai_client = None
+# Initialize Gemini AI
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-pro')
+else:
+    gemini_model = None
 
 class VideoRequest(BaseModel):
     url: str
@@ -233,26 +230,35 @@ def extract_captions(video_id: str) -> Optional[str]:
         return None
 
 def summarize_text(text: str, content_type: str) -> str:
-    """Summarize text using OpenAI"""
+    """Summarize text using Google Gemini"""
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="No text content to summarize")
     
+    if not gemini_model:
+        raise HTTPException(status_code=500, detail="Gemini API not configured")
+    
     # Limit text length to prevent token overflow
-    max_chars = 12000
+    max_chars = 30000  # Gemini can handle more text than GPT-3.5
     if len(text) > max_chars:
         text = text[:max_chars] + "..."
     
     if content_type == "description":
-        system_prompt = """You are an expert content summarizer. Create a comprehensive summary based on the YouTube video description provided. Extract key information, main topics, and important details mentioned in the description.
+        prompt = f"""You are an expert content summarizer. Create a comprehensive summary based on the YouTube video description provided. Extract key information, main topics, and important details mentioned in the description.
 
 Your summary should:
 - Identify the main topic and purpose of the video
 - Extract key points and important information
 - Organize content clearly with headers if needed
 - Include any specific details, links, or resources mentioned
-- Maintain context and meaning from the description"""
+- Maintain context and meaning from the description
+
+YouTube video description to summarize:
+
+{text}
+
+Please provide a detailed, structured summary:"""
     else:
-        system_prompt = """You are an expert content summarizer specializing in YouTube videos. Create a comprehensive, well-structured summary that captures the key information, main arguments, and important details from the video content.
+        prompt = f"""You are an expert content summarizer specializing in YouTube videos. Create a comprehensive, well-structured summary that captures the key information, main arguments, and important details from the video content.
 
 Your summary should:
 - Begin with a brief overview of the video's main topic
@@ -260,63 +266,33 @@ Your summary should:
 - Use bullet points for key takeaways and important facts
 - Include any specific examples, statistics, or quotes that are particularly noteworthy
 - Maintain the original context and meaning
-- Be detailed enough to be valuable while remaining concise"""
+- Be detailed enough to be valuable while remaining concise
 
-    user_prompt = f"Please create a detailed, structured summary of this YouTube video {content_type}:\n\n{text}"
+YouTube video transcript to summarize:
+
+{text}
+
+Please provide a detailed, structured summary:"""
     
     try:
-        # Try with newer OpenAI client first
-        if openai_client:
-            response = openai_client.chat.completions.create(
-                model="gpt-3.5-turbo-16k",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=800,
-                temperature=0.2,
+        response = gemini_model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.3,
+                max_output_tokens=800,
+                top_p=0.8,
+                top_k=40
             )
-            return response.choices[0].message.content
+        )
+        
+        if response.text:
+            return response.text.strip()
         else:
-            # Fallback for older OpenAI versions
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-16k",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=800,
-                temperature=0.2,
-            )
-            return response['choices'][0]['message']['content']
+            raise HTTPException(status_code=500, detail="Gemini API returned empty response")
             
-    except Exception:
-        # Fallback to regular model if 16k fails
-        try:
-            if openai_client:
-                response = openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt[:8000]}
-                    ],
-                    max_tokens=600,
-                    temperature=0.3,
-                )
-                return response.choices[0].message.content
-            else:
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt[:8000]}
-                    ],
-                    max_tokens=600,
-                    temperature=0.3,
-                )
-                return response['choices'][0]['message']['content']
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
+    except Exception as e:
+        print(f"Gemini API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gemini API error: {str(e)}")
 
 async def process_video_summary(video_id: str) -> Dict[str, Any]:
     """Process video summary with priority: captions -> description"""
@@ -391,8 +367,8 @@ async def summarize_video(request: VideoRequest):
     """Summarize video from URL"""
     if not YOUTUBE_DATA_API_KEY:
         raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
-    if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API key not configured")
     
     video_id = get_video_id(request.url)
     if not video_id:
@@ -405,7 +381,7 @@ async def summarize_video_by_id(video_id: str):
     """Summarize video by video ID"""
     if not YOUTUBE_DATA_API_KEY:
         raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
-    if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Gemini API key not configured")
     
     return await process_video_summary(video_id)
