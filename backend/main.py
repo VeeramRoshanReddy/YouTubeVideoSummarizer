@@ -167,7 +167,10 @@ def get_video_id(url):
     return None
 
 def fetch_captions(video_id):
+    """Fetch captions/transcripts from YouTube video"""
     try:
+        print(f"Fetching captions for video ID: {video_id}")
+        
         # Try to get available transcript languages first
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
@@ -175,17 +178,21 @@ def fetch_captions(video_id):
         try:
             transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
             transcript_data = transcript.fetch()
+            print("Found English transcript")
         except:
             # If English not available, try any available transcript
             try:
                 transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
                 transcript_data = transcript.fetch()
+                print("Found generated English transcript")
             except:
                 # Get any available transcript
                 available_transcripts = list(transcript_list)
                 if available_transcripts:
                     transcript_data = available_transcripts[0].fetch()
+                    print(f"Found transcript in language: {available_transcripts[0].language_code}")
                 else:
+                    print("No transcripts available")
                     return None
         
         # Combine all transcript entries
@@ -193,23 +200,33 @@ def fetch_captions(video_id):
             caption_text = ' '.join([entry['text'] for entry in transcript_data])
             
             if caption_text and len(caption_text.strip()) > 50:
+                print(f"Caption text length: {len(caption_text)} characters")
                 return caption_text.strip()
+        
+        print("Caption text too short or empty")
+        return None
                 
     except Exception as e:
+        print(f"Error fetching captions: {str(e)}")
         # Fallback to simple method
         try:
             transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
             caption_text = ' '.join([entry['text'] for entry in transcript_list])
             
             if caption_text and len(caption_text.strip()) > 50:
+                print("Fallback method successful")
                 return caption_text.strip()
                 
-        except Exception:
+        except Exception as e2:
+            print(f"Fallback method also failed: {str(e2)}")
             pass
     
     return None
 
 def download_audio(url, output_path):
+    """Download audio from YouTube video"""
+    print(f"Attempting to download audio from: {url}")
+    
     # Try multiple download strategies
     strategies = [
         # Strategy 1: Standard audio extraction
@@ -243,8 +260,9 @@ def download_audio(url, output_path):
         }
     ]
     
-    for strategy in strategies:
+    for i, strategy in enumerate(strategies):
         try:
+            print(f"Trying download strategy {i+1}/{len(strategies)}")
             with yt_dlp.YoutubeDL(strategy) as ydl:
                 ydl.download([url])
                 
@@ -253,14 +271,19 @@ def download_audio(url, output_path):
             for ext in possible_extensions:
                 audio_file = output_path + ext
                 if os.path.exists(audio_file):
+                    print(f"Audio downloaded successfully: {audio_file}")
                     return audio_file
-        except Exception:
+        except Exception as e:
+            print(f"Strategy {i+1} failed: {str(e)}")
             continue
     
+    print("All download strategies failed")
     return None
 
 def transcribe_audio(audio_path):
+    """Transcribe audio using Whisper"""
     try:
+        print(f"Transcribing audio file: {audio_path}")
         model = whisper.load_model("tiny")  # Use tiny model for faster processing
         result = model.transcribe(
             audio_path,
@@ -269,17 +292,24 @@ def transcribe_audio(audio_path):
             fp16=False,
             verbose=False
         )
-        return result['text'].strip() if result['text'] else None
-    except Exception:
+        transcript = result['text'].strip() if result['text'] else None
+        if transcript:
+            print(f"Transcription successful, length: {len(transcript)} characters")
+        else:
+            print("Transcription resulted in empty text")
+        return transcript
+    except Exception as e:
+        print(f"Transcription failed: {str(e)}")
         return None
 
-def summarize_text(text, content_type="transcript"):
-    """Summarize text with focus on transcript/caption content only"""
+def summarize_text(text):
+    """Summarize text using OpenAI"""
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="No text content to summarize")
     
-    # Only handle transcript/caption content
-    system_prompt = "You are a helpful assistant that creates concise, informative summaries of YouTube video content. Focus on the main points, key takeaways, and important information discussed in the video."
+    print(f"Summarizing text of length: {len(text)} characters")
+    
+    system_prompt = "You are a helpful assistant that creates concise, informative summaries of YouTube video content. Focus on the main points, key takeaways, and important information discussed in the video. Structure your summary with clear sections and bullet points when appropriate."
     user_prompt = f"Please summarize this YouTube video transcript in a clear, structured way:\n\n{text}"
     
     try:
@@ -295,8 +325,11 @@ def summarize_text(text, content_type="transcript"):
             max_tokens=600,
             temperature=0.3,
         )
-        return response.choices[0].message.content
-    except Exception:
+        summary = response.choices[0].message.content
+        print("OpenAI summarization successful")
+        return summary
+    except Exception as e1:
+        print(f"New OpenAI client failed: {str(e1)}")
         # Fallback to older OpenAI API format
         try:
             response = openai.ChatCompletion.create(
@@ -308,6 +341,144 @@ def summarize_text(text, content_type="transcript"):
                 max_tokens=600,
                 temperature=0.3,
             )
-            return response['choices'][0]['message']['content']
+            summary = response['choices'][0]['message']['content']
+            print("Fallback OpenAI method successful")
+            return summary
+        except Exception as e2:
+            print(f"Fallback OpenAI method also failed: {str(e2)}")
+            raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e2)}")
+
+async def process_video_summary(video_id: str):
+    """Process video summary - main logic"""
+    print(f"Processing video summary for ID: {video_id}")
+    
+    # Validate video ID format
+    if not video_id or len(video_id) != 11 or not video_id.replace('-', '').replace('_', '').isalnum():
+        raise HTTPException(status_code=400, detail="Invalid YouTube video ID format")
+    
+    # Get video info
+    try:
+        print("Fetching video information from YouTube API")
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
+        video_response = youtube.videos().list(
+            part='snippet',
+            id=video_id
+        ).execute()
+        
+        if not video_response.get('items'):
+            raise HTTPException(status_code=404, detail="Video not found or is private/unavailable")
+        
+        video_info = video_response['items'][0]['snippet']
+        title = video_info.get('title', 'Unknown Title')
+        print(f"Video found: {title}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching video info: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch video information from YouTube API")
+
+    # Try captions first (most reliable and preferred method)
+    print("Attempting to fetch captions...")
+    captions = fetch_captions(video_id)
+    
+    if captions and len(captions.strip()) > 100:
+        try:
+            print("Captions found, generating summary...")
+            summary = summarize_text(captions)
+            return {
+                "success": True,
+                "summary": summary,
+                "method": "captions",
+                "video_id": video_id,
+                "title": title
+            }
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
+            print(f"Caption summarization failed: {str(e)}")
+            # Continue to audio transcription
+    else:
+        print("No suitable captions found, trying audio transcription...")
+    
+    # Fallback to audio transcription if captions not available
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_base_path = os.path.join(tmpdir, f"audio_{video_id}")
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            print("Attempting audio download and transcription...")
+            audio_file = download_audio(video_url, audio_base_path)
+            
+            if not audio_file or not os.path.exists(audio_file):
+                raise HTTPException(
+                    status_code=422, 
+                    detail="Unable to access video content. This video may have copyright restrictions, be region-blocked, have no available captions, or be a music video without spoken content."
+                )
+            
+            transcript = transcribe_audio(audio_file)
+            
+            if not transcript or len(transcript.strip()) < 50:
+                raise HTTPException(
+                    status_code=422, 
+                    detail="Could not extract meaningful spoken content from video. The video may contain mostly music, have poor audio quality, or be too short."
+                )
+            
+            print("Audio transcription successful, generating summary...")
+            summary = summarize_text(transcript)
+            
+            return {
+                "success": True,
+                "summary": summary,
+                "method": "audio_transcription",
+                "video_id": video_id,
+                "title": title,
+                "note": "Summary generated from audio transcription as captions were not available"
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Audio transcription failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail="Unable to process video content. The video may have restricted access, contain no spoken content, or the audio could not be processed."
+        )
+
+@app.post("/summarize")
+async def summarize_video(request: VideoRequest):
+    """Summarize video from URL"""
+    if not YOUTUBE_DATA_API_KEY:
+        raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    
+    print(f"Received summarize request for URL: {request.url}")
+    
+    video_id = get_video_id(request.url)
+    if not video_id:
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL format")
+
+    print(f"Extracted video ID: {video_id}")
+    return await process_video_summary(video_id)
+
+@app.post("/summary/{video_id}")
+async def summarize_video_by_id(video_id: str):
+    """Summarize video by video ID"""
+    if not YOUTUBE_DATA_API_KEY:
+        raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    
+    print(f"Received summary request for video ID: {video_id}")
+    
+    if not video_id or len(video_id) != 11:
+        raise HTTPException(status_code=400, detail="Invalid YouTube video ID format")
+
+    return await process_video_summary(video_id)
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "youtube_api": "configured" if YOUTUBE_DATA_API_KEY else "missing",
+        "openai_api": "configured" if OPENAI_API_KEY else "missing"
+    }
