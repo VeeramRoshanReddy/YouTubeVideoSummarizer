@@ -13,6 +13,7 @@ import requests
 import json
 import re
 from urllib.parse import urlparse, parse_qs
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # Load environment variables from .env
 load_dotenv()
@@ -167,68 +168,28 @@ def get_video_id(url):
 
 def fetch_captions(video_id):
     try:
-        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
+        # Try English transcript first
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'en-US', 'en-GB'])
         
-        # Get list of available captions
-        captions_response = youtube.captions().list(
-            part='snippet',
-            videoId=video_id
-        ).execute()
+        # Combine all transcript entries
+        caption_text = ' '.join([entry['text'] for entry in transcript_list])
         
-        if not captions_response.get('items'):
-            return None
-            
-        # Try to find captions in order of preference
-        caption_tracks = captions_response['items']
-        
-        # Sort captions by preference: English manual > English auto > Any manual > Any auto
-        def caption_priority(track):
-            snippet = track['snippet']
-            language = snippet.get('language', '').lower()
-            track_kind = snippet.get('trackKind', '')
-            
-            if language in ['en', 'en-us', 'en-gb']:
-                if track_kind == 'standard':
-                    return 1  # Highest priority
-                elif track_kind == 'ASR':
-                    return 2  # Second priority
-            else:
-                if track_kind == 'standard':
-                    return 3  # Third priority
-                elif track_kind == 'ASR':
-                    return 4  # Fourth priority
-            return 5  # Lowest priority
-        
-        caption_tracks.sort(key=caption_priority)
-        
-        # Try each caption track until one works
-        for track in caption_tracks:
-            try:
-                # Download the caption
-                caption_content = youtube.captions().download(
-                    id=track['id'],
-                    tfmt='srt'  # Request SRT format
-                ).execute()
-                
-                if isinstance(caption_content, bytes):
-                    caption_text = caption_content.decode('utf-8')
-                else:
-                    caption_text = str(caption_content)
-                
-                # Clean SRT format - remove timestamps and formatting
-                caption_text = re.sub(r'\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n', '', caption_text)
-                caption_text = re.sub(r'\n\s*\n', ' ', caption_text)  # Replace multiple newlines with space
-                caption_text = re.sub(r'<[^>]+>', '', caption_text)  # Remove HTML tags
-                caption_text = caption_text.strip()
-                
-                if caption_text and len(caption_text) > 50:
-                    return caption_text
-                    
-            except Exception:
-                continue  # Try next caption track
+        if caption_text and len(caption_text.strip()) > 50:
+            return caption_text.strip()
             
     except Exception:
-        pass
+        try:
+            # Try any available transcript if English not available
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            
+            # Combine all transcript entries
+            caption_text = ' '.join([entry['text'] for entry in transcript_list])
+            
+            if caption_text and len(caption_text.strip()) > 50:
+                return caption_text.strip()
+                
+        except Exception:
+            pass
     
     return None
 

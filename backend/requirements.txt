@@ -7,4 +7,5 @@ whisper
 ffmpeg-python
 pydantic
 python-dotenv
-requests 
+requests
+youtube-transcript-api 
