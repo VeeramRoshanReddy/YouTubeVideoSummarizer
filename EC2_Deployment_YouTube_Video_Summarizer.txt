@@ -1,0 +1,13 @@
+scp -i cc-key.pem "C:\Users\Veeram Roshan\OneDrive\Desktop\Projects\YouTube_Video_Summarizer\frontend\index.html" "C:\Users\Veeram Roshan\OneDrive\Desktop\Projects\YouTube_Video_Summarizer\frontend\styles.css" "C:\Users\Veeram Roshan\OneDrive\Desktop\Projects\YouTube_Video_Summarizer\frontend\script.js" ubuntu@ec2-108-129-116-74.eu-west-1.compute.amazonaws.com:/tmp/
+
+
+
+
+ssh -i cc-key.pem ubuntu@ec2-108-129-116-74.eu-west-1.compute.amazonaws.com
+
+
+
+
+sudo mv /tmp/index.html /var/www/html/
+sudo mv /tmp/styles.css /var/www/html/
+sudo mv /tmp/script.js /var/www/html/
