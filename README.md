@@ -1,6 +1,6 @@
 # YouTube Video Summarizer
 
-A full-stack web application to generate concise AI-powered summaries of YouTube videos. Users authenticate with Google, submit a YouTube link, and receive a summary generated from captions or audio transcription using advanced AI models.
+A full-stack web application to generate concise AI-powered summaries of YouTube videos. Users authenticate with Google, submit a YouTube link, and receive a summary generated from captions using Gemini (Google's AI model). No audio transcription is performed.
 
 ---
 
@@ -8,8 +8,7 @@ A full-stack web application to generate concise AI-powered summaries of YouTube
 - **Google OAuth** authentication (frontend)
 - **Paste any YouTube video URL** to get a summary
 - **Captions extraction** via YouTube Data API and YouTube Transcript API
-- **Fallback to audio transcription** using Whisper if captions are unavailable
-- **Summarization** using OpenAI GPT models
+- **Summarization** using Gemini (Google's AI model)
 - **No persistent storage**—stateless, privacy-friendly
 - **Modern UI** (HTML, CSS, JS)
 
@@ -39,7 +38,7 @@ YouTube_Video_Summarizer/
 - **Dependencies:** See `requirements.txt`
 - **Environment Variables:**
   - `YOUTUBE_DATA_API_KEY` (YouTube Data API v3 key)
-  - `OPENAI_API_KEY` (OpenAI API key)
+  - `GEMINI_API_KEY` (Gemini API key)
   - `GOOGLE_CLIENT_ID` (Google OAuth client ID)
   - `GOOGLE_CLIENT_SECRET` (Google OAuth client secret)
 
@@ -82,7 +81,7 @@ uvicorn main:app --reload
 ## .env Example (Backend)
 ```
 YOUTUBE_DATA_API_KEY=your_youtube_data_api_key
-OPENAI_API_KEY=your_openai_api_key
+GEMINI_API_KEY=your_gemini_api_key
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
 ```
@@ -94,6 +93,3 @@ GOOGLE_CLIENT_SECRET=your_google_client_secret
 - Ignores frontend build artifacts (if any)
 
 ---
-
-## License
-MIT (or specify your license) 
