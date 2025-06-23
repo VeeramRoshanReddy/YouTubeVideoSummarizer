@@ -112,68 +112,140 @@ def get_video_id(url):
 def fetch_captions(video_id):
     try:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
-        captions = youtube.captions().list(part='snippet', videoId=video_id).execute()
-        if 'items' in captions and captions['items']:
-            caption_id = captions['items'][0]['id']
-            caption = youtube.captions().download(id=caption_id).execute()
-            return caption.get('body', '')
-        return ''
+        
+        # Get list of available captions
+        captions_response = youtube.captions().list(
+            part='snippet',
+            videoId=video_id
+        ).execute()
+        
+        if not captions_response.get('items'):
+            return None
+            
+        # Try to find English captions first, then any auto-generated, then any available
+        caption_tracks = captions_response['items']
+        
+        preferred_caption = None
+        auto_caption = None
+        any_caption = None
+        
+        for track in caption_tracks:
+            snippet = track['snippet']
+            language = snippet.get('language', '').lower()
+            track_kind = snippet.get('trackKind', '')
+            
+            if language in ['en', 'en-us', 'en-gb'] and track_kind == 'standard':
+                preferred_caption = track
+                break
+            elif language in ['en', 'en-us', 'en-gb'] and track_kind == 'ASR':
+                auto_caption = track
+            elif not any_caption:
+                any_caption = track
+        
+        # Use the best available caption
+        selected_caption = preferred_caption or auto_caption or any_caption
+        
+        if selected_caption:
+            # Download the caption
+            caption_content = youtube.captions().download(
+                id=selected_caption['id'],
+                tfmt='srt'  # Request SRT format
+            ).execute()
+            
+            if isinstance(caption_content, bytes):
+                caption_text = caption_content.decode('utf-8')
+            else:
+                caption_text = str(caption_content)
+            
+            # Clean SRT format - remove timestamps and formatting
+            import re
+            # Remove SRT formatting (numbers, timestamps, empty lines)
+            caption_text = re.sub(r'\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n', '', caption_text)
+            caption_text = re.sub(r'\n\s*\n', ' ', caption_text)  # Replace multiple newlines with space
+            caption_text = re.sub(r'<[^>]+>', '', caption_text)  # Remove HTML tags
+            caption_text = caption_text.strip()
+            
+            return caption_text if caption_text else None
+            
     except Exception:
-        return ''
+        pass
+    
+    return None
 
 def download_audio(url, output_path):
     ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': output_path,
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',
+        'outtmpl': output_path + '.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
+            'preferredcodec': 'wav',
             'preferredquality': '192',
         }],
         'quiet': True,
+        'no_warnings': True,
+        'extractaudio': True,
+        'audioformat': 'wav',
+        'prefer_ffmpeg': True,
     }
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
+        
+    # Return the path to the extracted audio file
+    possible_extensions = ['.wav', '.m4a', '.mp3', '.webm']
+    for ext in possible_extensions:
+        audio_file = output_path + ext
+        if os.path.exists(audio_file):
+            return audio_file
+    
+    return None
 
 def transcribe_audio(audio_path):
     model = whisper.load_model("base")
-    result = model.transcribe(audio_path)
-    return result['text']
+    result = model.transcribe(
+        audio_path,
+        language='en',
+        task='transcribe',
+        fp16=False
+    )
+    return result['text'].strip() if result['text'] else None
 
 def summarize_text(text):
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="No text content to summarize")
+    
     try:
-        # Updated for newer OpenAI library versions
-        response = openai.ChatCompletion.create(
+        # Try newer OpenAI client first
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Summarize the following YouTube video transcript in a concise way. Provide key points and main takeaways."},
-                {"role": "user", "content": text}
+                {"role": "system", "content": "You are a helpful assistant that creates concise, informative summaries of YouTube video content. Focus on the main points, key takeaways, and important information discussed in the video."},
+                {"role": "user", "content": f"Please summarize this YouTube video transcript in a clear, structured way:\n\n{text}"}
             ],
-            max_tokens=500,
-            temperature=0.5,
+            max_tokens=600,
+            temperature=0.3,
         )
-        return response['choices'][0]['message']['content']
-    except Exception as e:
-        # Fallback for newer OpenAI client
+        return response.choices[0].message.content
+    except Exception:
+        # Fallback to older OpenAI API format
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=OPENAI_API_KEY)
-            response = client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Summarize the following YouTube video transcript in a concise way. Provide key points and main takeaways."},
-                    {"role": "user", "content": text}
+                    {"role": "system", "content": "You are a helpful assistant that creates concise, informative summaries of YouTube video content. Focus on the main points, key takeaways, and important information discussed in the video."},
+                    {"role": "user", "content": f"Please summarize this YouTube video transcript in a clear, structured way:\n\n{text}"}
                 ],
-                max_tokens=500,
-                temperature=0.5,
+                max_tokens=600,
+                temperature=0.3,
             )
-            return response.choices[0].message.content
-        except Exception as fallback_error:
-            raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(fallback_error)}")
+            return response['choices'][0]['message']['content']
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
 @app.post("/summarize")
 async def summarize_video(request: VideoRequest):
-    # Validate API keys
     if not YOUTUBE_DATA_API_KEY:
         raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
     if not OPENAI_API_KEY:
@@ -187,7 +259,6 @@ async def summarize_video(request: VideoRequest):
 
 @app.post("/summary/{video_id}")
 async def summarize_video_by_id(video_id: str):
-    # Validate API keys
     if not YOUTUBE_DATA_API_KEY:
         raise HTTPException(status_code=500, detail="YouTube Data API key not configured")
     if not OPENAI_API_KEY:
@@ -199,70 +270,63 @@ async def summarize_video_by_id(video_id: str):
     return await process_video_summary(video_id)
 
 async def process_video_summary(video_id: str):
-    # First, check if video exists and is accessible
+    # Get video info
     try:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
         video_response = youtube.videos().list(
-            part='snippet,status',
+            part='snippet',
             id=video_id
         ).execute()
         
         if not video_response.get('items'):
-            raise HTTPException(status_code=404, detail="Video not found or is private/unavailable")
+            raise HTTPException(status_code=404, detail="Video not found")
         
         video_info = video_response['items'][0]
-        if video_info['status']['privacyStatus'] != 'public':
-            raise HTTPException(status_code=403, detail="Video is not publicly available")
-            
+        video_title = video_info['snippet'].get('title', 'Unknown')
+        
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to verify video accessibility: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch video information")
 
-    # Try to fetch captions first
-    try:
-        captions = fetch_captions(video_id)
-    except Exception:
-        captions = ""
-
-    if captions and captions.strip():
-        # Summarize captions
+    # Try captions first
+    captions = fetch_captions(video_id)
+    
+    if captions and len(captions.strip()) > 50:  # Ensure we have substantial caption content
+        summary = summarize_text(captions)
+        return {
+            "summary": summary,
+            "method": "captions",
+            "video_id": video_id,
+            "title": video_title
+        }
+    
+    # Fallback to audio transcription
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_base_path = os.path.join(tmpdir, f"audio_{video_id}")
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
         try:
-            summary = summarize_text(captions)
+            audio_file = download_audio(video_url, audio_base_path)
+            
+            if not audio_file or not os.path.exists(audio_file):
+                raise HTTPException(status_code=500, detail="Failed to extract audio from video")
+            
+            transcript = transcribe_audio(audio_file)
+            
+            if not transcript or len(transcript.strip()) < 20:
+                raise HTTPException(status_code=422, detail="Could not extract meaningful content from video")
+            
+            summary = summarize_text(transcript)
+            
             return {
                 "summary": summary,
-                "method": "captions",
+                "method": "transcription",
                 "video_id": video_id,
-                "title": video_info['snippet'].get('title', 'Unknown')
+                "title": video_title
             }
+            
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to summarize captions: {str(e)}")
-    else:
-        # Download audio and transcribe as fallback
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audio_path = os.path.join(tmpdir, f"audio_{video_id}")
-            try:
-                video_url = f"https://www.youtube.com/watch?v={video_id}"
-                download_audio(video_url, audio_path)
-                # The actual file will have .mp3 extension after processing
-                mp3_path = f"{audio_path}.mp3"
-                if os.path.exists(mp3_path):
-                    transcript = transcribe_audio(mp3_path)
-                    summary = summarize_text(transcript)
-                    return {
-                        "summary": summary,
-                        "method": "transcription",
-                        "video_id": video_id,
-                        "title": video_info['snippet'].get('title', 'Unknown')
-                    }
-                else:
-                    raise HTTPException(status_code=500, detail="Audio extraction failed - video may be unavailable or protected")
-            except HTTPException:
-                raise
-            except Exception as e:
-                if "This content isn't available" in str(e) or "Private video" in str(e):
-                    raise HTTPException(status_code=403, detail="Video content is not accessible - it may be private, deleted, or region-restricted")
-                elif "Sign in to confirm your age" in str(e):
-                    raise HTTPException(status_code=403, detail="Video requires age verification and cannot be processed")
-                else:
-                    raise HTTPException(status_code=500, detail=f"Failed to process video audio: {str(e)}")
+            raise HTTPException(status_code=500, detail="Failed to process video audio")
