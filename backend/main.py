@@ -8,11 +8,25 @@ from googleapiclient.discovery import build
 import yt_dlp
 import whisper
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 # Load environment variables from .env
 load_dotenv()
 
 app = FastAPI()
+
+# CORS settings for Vercel frontend
+origins = [
+    "https://vidsummarize.online",  # your Vercel frontend domain
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 # Set your API keys here
 YOUTUBE_DATA_API_KEY = os.getenv("YOUTUBE_DATA_API_KEY")
