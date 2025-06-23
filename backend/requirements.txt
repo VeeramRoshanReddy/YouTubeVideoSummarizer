@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+google-api-python-client
+yt-dlp
+openai
+whisper
+ffmpeg-python
+pydantic 

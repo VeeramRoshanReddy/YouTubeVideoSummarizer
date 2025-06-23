@@ -1,7 +1,7 @@
 // OAuth Configuration
 const CLIENT_ID = '1060175441605-3hudt7ldlotdouoau00jsbuhnamqvgeg.apps.googleusercontent.com';
 const REDIRECT_URI = 'https://www.vidsummarize.online';
-const API_ENDPOINT = 'https://eroqf9awxe.execute-api.eu-west-1.amazonaws.com/prod';
+const API_ENDPOINT = '';
 
 // Elements
 let loginBtn;
