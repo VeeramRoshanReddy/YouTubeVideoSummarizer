@@ -9,6 +9,8 @@ import yt_dlp
 import whisper
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+import requests
+import json
 
 # Load environment variables from .env
 load_dotenv()
@@ -35,6 +37,8 @@ app.add_middleware(
 # Set your API keys here
 YOUTUBE_DATA_API_KEY = os.getenv("YOUTUBE_DATA_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
 # Updated OpenAI client initialization (for newer versions)
 if OPENAI_API_KEY:
@@ -43,6 +47,10 @@ if OPENAI_API_KEY:
 class VideoRequest(BaseModel):
     url: str
 
+class AuthRequest(BaseModel):
+    code: str
+    redirect_uri: str
+
 # ROOT PATH FIX - Add this endpoint
 @app.get("/")
 async def root():
@@ -50,9 +58,41 @@ async def root():
         "message": "YouTube Video Summarizer API is running!",
         "endpoints": {
             "summarize": "/summarize (POST)",
+            "auth": "/auth (POST)",
             "docs": "/docs (GET)"
         }
     }
+
+@app.post("/auth")
+async def exchange_code_for_token(auth_request: AuthRequest):
+    """Exchange OAuth authorization code for access token"""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google OAuth credentials not configured")
+    
+    token_url = "https://oauth2.googleapis.com/token"
+    token_data = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "code": auth_request.code,
+        "grant_type": "authorization_code",
+        "redirect_uri": auth_request.redirect_uri
+    }
+    
+    try:
+        response = requests.post(token_url, data=token_data)
+        response.raise_for_status()
+        token_info = response.json()
+        
+        return {
+            "access_token": token_info.get("access_token"),
+            "refresh_token": token_info.get("refresh_token"),
+            "expires_in": token_info.get("expires_in"),
+            "token_type": token_info.get("token_type", "Bearer")
+        }
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Token exchange failed: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 def get_video_id(url):
     # Extract video ID from URL
