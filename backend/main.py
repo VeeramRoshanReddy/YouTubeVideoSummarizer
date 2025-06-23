@@ -97,6 +97,37 @@ async def exchange_code_for_token(auth_request: AuthRequest):
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 def get_video_id(url):
+    """Get video metadata including description which can be used as fallback content"""
+    try:
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
+        video_response = youtube.videos().list(
+            part='snippet',
+            id=video_id
+        ).execute()
+        
+        if not video_response.get('items'):
+            return None, None, None
+        
+        video_info = video_response['items'][0]['snippet']
+        title = video_info.get('title', 'Unknown')
+        description = video_info.get('description', '')
+        
+        # Clean and extract meaningful content from description
+        if description and len(description.strip()) > 100:
+            # Remove URLs and social media handles
+            clean_desc = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', description)
+            clean_desc = re.sub(r'@\w+', '', clean_desc)
+            clean_desc = re.sub(r'#\w+', '', clean_desc)
+            clean_desc = re.sub(r'\n\s*\n', '\n', clean_desc)
+            clean_desc = clean_desc.strip()
+            
+            if len(clean_desc) > 200:  # Only use if substantial content
+                return title, clean_desc, True
+        
+        return title, None, False
+        
+    except Exception:
+        return None, None, False
     patterns = [
         r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([A-Za-z0-9_-]{11})',
         r'(?:youtube\.com/.*[?&]v=)([A-Za-z0-9_-]{11})',
@@ -122,50 +153,54 @@ def fetch_captions(video_id):
         if not captions_response.get('items'):
             return None
             
-        # Try to find English captions first, then any auto-generated, then any available
+        # Try to find captions in order of preference
         caption_tracks = captions_response['items']
         
-        preferred_caption = None
-        auto_caption = None
-        any_caption = None
-        
-        for track in caption_tracks:
+        # Sort captions by preference: English manual > English auto > Any manual > Any auto
+        def caption_priority(track):
             snippet = track['snippet']
             language = snippet.get('language', '').lower()
             track_kind = snippet.get('trackKind', '')
             
-            if language in ['en', 'en-us', 'en-gb'] and track_kind == 'standard':
-                preferred_caption = track
-                break
-            elif language in ['en', 'en-us', 'en-gb'] and track_kind == 'ASR':
-                auto_caption = track
-            elif not any_caption:
-                any_caption = track
-        
-        # Use the best available caption
-        selected_caption = preferred_caption or auto_caption or any_caption
-        
-        if selected_caption:
-            # Download the caption
-            caption_content = youtube.captions().download(
-                id=selected_caption['id'],
-                tfmt='srt'  # Request SRT format
-            ).execute()
-            
-            if isinstance(caption_content, bytes):
-                caption_text = caption_content.decode('utf-8')
+            if language in ['en', 'en-us', 'en-gb']:
+                if track_kind == 'standard':
+                    return 1  # Highest priority
+                elif track_kind == 'ASR':
+                    return 2  # Second priority
             else:
-                caption_text = str(caption_content)
-            
-            # Clean SRT format - remove timestamps and formatting
-            import re
-            # Remove SRT formatting (numbers, timestamps, empty lines)
-            caption_text = re.sub(r'\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n', '', caption_text)
-            caption_text = re.sub(r'\n\s*\n', ' ', caption_text)  # Replace multiple newlines with space
-            caption_text = re.sub(r'<[^>]+>', '', caption_text)  # Remove HTML tags
-            caption_text = caption_text.strip()
-            
-            return caption_text if caption_text else None
+                if track_kind == 'standard':
+                    return 3  # Third priority
+                elif track_kind == 'ASR':
+                    return 4  # Fourth priority
+            return 5  # Lowest priority
+        
+        caption_tracks.sort(key=caption_priority)
+        
+        # Try each caption track until one works
+        for track in caption_tracks:
+            try:
+                # Download the caption
+                caption_content = youtube.captions().download(
+                    id=track['id'],
+                    tfmt='srt'  # Request SRT format
+                ).execute()
+                
+                if isinstance(caption_content, bytes):
+                    caption_text = caption_content.decode('utf-8')
+                else:
+                    caption_text = str(caption_content)
+                
+                # Clean SRT format - remove timestamps and formatting
+                caption_text = re.sub(r'\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n', '', caption_text)
+                caption_text = re.sub(r'\n\s*\n', ' ', caption_text)  # Replace multiple newlines with space
+                caption_text = re.sub(r'<[^>]+>', '', caption_text)  # Remove HTML tags
+                caption_text = caption_text.strip()
+                
+                if caption_text and len(caption_text) > 50:
+                    return caption_text
+                    
+            except Exception:
+                continue  # Try next caption track
             
     except Exception:
         pass
@@ -173,8 +208,10 @@ def fetch_captions(video_id):
     return None
 
 def download_audio(url, output_path):
-    try:
-        ydl_opts = {
+    # Try multiple download strategies
+    strategies = [
+        # Strategy 1: Standard audio extraction
+        {
             'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
             'outtmpl': output_path + '.%(ext)s',
             'quiet': True,
@@ -187,21 +224,38 @@ def download_audio(url, output_path):
                 'preferredquality': '192',
             }],
             'prefer_ffmpeg': True,
+        },
+        # Strategy 2: Simple format without post-processing
+        {
+            'format': 'bestaudio/best',
+            'outtmpl': output_path + '.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+        },
+        # Strategy 3: Lowest quality for restricted videos
+        {
+            'format': 'worst[ext=mp4]/worst',
+            'outtmpl': output_path + '.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
         }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-            
-        # Return the path to the extracted audio file
-        possible_extensions = ['.mp3', '.wav', '.m4a', '.webm', '.ogg']
-        for ext in possible_extensions:
-            audio_file = output_path + ext
-            if os.path.exists(audio_file):
-                return audio_file
-        
-        return None
-    except Exception:
-        return None
+    ]
+    
+    for strategy in strategies:
+        try:
+            with yt_dlp.YoutubeDL(strategy) as ydl:
+                ydl.download([url])
+                
+            # Return the path to the extracted audio file
+            possible_extensions = ['.mp3', '.wav', '.m4a', '.webm', '.ogg', '.mp4']
+            for ext in possible_extensions:
+                audio_file = output_path + ext
+                if os.path.exists(audio_file):
+                    return audio_file
+        except Exception:
+            continue
+    
+    return None
 
 def transcribe_audio(audio_path):
     try:
@@ -277,41 +331,47 @@ async def summarize_video_by_id(video_id: str):
     return await process_video_summary(video_id)
 
 async def process_video_summary(video_id: str):
-    # Get video info
+    # Get video info and metadata
     try:
-        youtube = build('youtube', 'v3', developerKey=YOUTUBE_DATA_API_KEY)
-        video_response = youtube.videos().list(
-            part='snippet',
-            id=video_id
-        ).execute()
-        
-        if not video_response.get('items'):
+        title, description, has_desc = get_video_metadata(video_id)
+        if not title:
             raise HTTPException(status_code=404, detail="Video not found")
-        
-        video_info = video_response['items'][0]
-        video_title = video_info['snippet'].get('title', 'Unknown')
         
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to fetch video information")
 
-    # Try captions first
+    # Try captions first (most reliable)
     captions = fetch_captions(video_id)
     
-    if captions and len(captions.strip()) > 50:  # Ensure we have substantial caption content
+    if captions and len(captions.strip()) > 100:
         try:
             summary = summarize_text(captions)
             return {
                 "summary": summary,
                 "method": "captions",
                 "video_id": video_id,
-                "title": video_title
+                "title": title
             }
         except Exception:
-            pass  # Continue to audio transcription if caption summarization fails
+            pass  # Continue to next method
     
-    # Fallback to audio transcription
+    # Try description as fallback if substantial content available
+    if has_desc and description:
+        try:
+            summary = summarize_text(description)
+            return {
+                "summary": summary,
+                "method": "description",
+                "video_id": video_id,
+                "title": title,
+                "note": "Summary generated from video description due to restricted access"
+            }
+        except Exception:
+            pass  # Continue to audio transcription
+    
+    # Fallback to audio transcription (last resort)
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_base_path = os.path.join(tmpdir, f"audio_{video_id}")
@@ -320,7 +380,17 @@ async def process_video_summary(video_id: str):
             audio_file = download_audio(video_url, audio_base_path)
             
             if not audio_file or not os.path.exists(audio_file):
-                raise HTTPException(status_code=422, detail="Could not extract audio from video. Video may be restricted or unavailable.")
+                # If no other method worked, provide a basic response
+                if description and len(description.strip()) > 50:
+                    return {
+                        "summary": f"Video: {title}\n\nDescription: {description[:500]}{'...' if len(description) > 500 else ''}",
+                        "method": "basic_info",
+                        "video_id": video_id,
+                        "title": title,
+                        "note": "Could not access video content. Showing available information."
+                    }
+                else:
+                    raise HTTPException(status_code=422, detail="Video content is not accessible. This may be due to copyright restrictions, region blocking, or privacy settings.")
             
             transcript = transcribe_audio(audio_file)
             
@@ -333,9 +403,19 @@ async def process_video_summary(video_id: str):
                 "summary": summary,
                 "method": "transcription",
                 "video_id": video_id,
-                "title": video_title
+                "title": title
             }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to process video. Please try again or check if the video is available.")
+        # Final fallback - return basic info if available
+        if description and len(description.strip()) > 50:
+            return {
+                "summary": f"Video: {title}\n\nDescription: {description[:500]}{'...' if len(description) > 500 else ''}",
+                "method": "basic_info",
+                "video_id": video_id,
+                "title": title,
+                "note": "Could not process video content. Showing available information."
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Unable to process video content through any available method.")
