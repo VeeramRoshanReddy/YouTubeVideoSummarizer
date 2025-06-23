@@ -40,10 +40,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
-# Initialize Gemini AI
+# Initialize Gemini AI with updated model name
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-pro')
+    # Updated to use current Gemini 2.5 Flash model
+    gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 else:
     gemini_model = None
 
@@ -238,7 +239,8 @@ def summarize_text(text: str, content_type: str) -> str:
         raise HTTPException(status_code=500, detail="Gemini API not configured")
     
     # Limit text length to prevent token overflow
-    max_chars = 30000  # Gemini can handle more text than GPT-3.5
+    # Gemini 2.5 Flash can handle larger context windows
+    max_chars = 100000  # Increased limit for Gemini 2.5 Flash
     if len(text) > max_chars:
         text = text[:max_chars] + "..."
     
@@ -279,7 +281,7 @@ Please provide a detailed, structured summary:"""
             prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
-                max_output_tokens=800,
+                max_output_tokens=1000,  # Slightly increased for better summaries
                 top_p=0.8,
                 top_k=40
             )
