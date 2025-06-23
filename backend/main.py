@@ -17,7 +17,7 @@ app = FastAPI()
 
 # CORS settings for Vercel frontend
 origins = [
-    "https://vidsummarize.online",  # your Vercel frontend domain
+    "*",  # your Vercel frontend domain
 ]
 
 app.add_middleware(
